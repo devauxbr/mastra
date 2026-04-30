@@ -3,6 +3,7 @@ import { SemanticConventions } from '@arizeai/openinference-semantic-conventions
 import { SpanType, TracingEventType } from '@mastra/core/observability';
 import type { AnyExportedSpan } from '@mastra/core/observability';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { OpenInferenceOTLPTraceExporter } from './openInferenceOTLPExporter';
 import { ArthurExporter } from './tracing';
 
 // Capture spans exported by the mocked OTLP exporter
@@ -171,6 +172,79 @@ describe('ArthurExporter', () => {
       // Audio tokens
       expect(attrs[SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_AUDIO]).toBe(10);
       expect(attrs[SemanticConventions.LLM_TOKEN_COUNT_COMPLETION_DETAILS_AUDIO]).toBe(5);
+    });
+  });
+
+  describe('Legacy cache attribute fallback', () => {
+    // Construct a synthetic post-SpanConverter OTel span so we can inject the
+    // old non-spec attribute names directly. This simulates a downstream user
+    // pinning an older @mastra/otel-exporter against the current @mastra/arthur.
+    function makeSpan(extraAttrs: Record<string, any>) {
+      return {
+        name: 'test-span',
+        kind: 0,
+        spanContext: () => ({
+          traceId: 'a'.repeat(32),
+          spanId: 'b'.repeat(16),
+          traceFlags: 1,
+          isRemote: false,
+        }),
+        parentSpanContext: undefined,
+        startTime: [0, 0],
+        endTime: [1, 0],
+        status: { code: 0 },
+        attributes: {
+          'mastra.span.type': 'model_generation',
+          'gen_ai.operation.name': 'chat',
+          'gen_ai.system': 'anthropic',
+          'gen_ai.request.model': 'claude-3-opus',
+          'gen_ai.usage.input_tokens': 100,
+          'gen_ai.usage.output_tokens': 50,
+          ...extraAttrs,
+        },
+        links: [],
+        events: [],
+        duration: [1, 0],
+        ended: true,
+        resource: { attributes: {} },
+        instrumentationScope: { name: 'test', version: '0.0.0' },
+        droppedAttributesCount: 0,
+        droppedEventsCount: 0,
+        droppedLinksCount: 0,
+      } as any;
+    }
+
+    it('falls back to legacy cached_input_tokens / cache_write_tokens when only legacy names are present', () => {
+      const otlpExporter = new OpenInferenceOTLPTraceExporter({ url: 'http://test', headers: {} });
+      const span = makeSpan({
+        'gen_ai.usage.cached_input_tokens': 80,
+        'gen_ai.usage.cache_write_tokens': 20,
+      });
+
+      otlpExporter.export([span], () => {});
+
+      expect(exportedSpans.length).toBe(1);
+      const attrs = exportedSpans[0].attributes;
+      expect(attrs[SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]).toBe(80);
+      expect(attrs[SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE]).toBe(20);
+    });
+
+    it('prefers spec attribute names over legacy ones when both are present', () => {
+      const otlpExporter = new OpenInferenceOTLPTraceExporter({ url: 'http://test', headers: {} });
+      const span = makeSpan({
+        'gen_ai.usage.cache_read.input_tokens': 80,
+        'gen_ai.usage.cached_input_tokens': 999, // bogus legacy value
+        'gen_ai.usage.cache_creation.input_tokens': 20,
+        'gen_ai.usage.cache_write_tokens': 999, // bogus legacy value
+      });
+
+      otlpExporter.export([span], () => {});
+
+      expect(exportedSpans.length).toBe(1);
+      const attrs = exportedSpans[0].attributes;
+      // Spec value wins, not 999
+      expect(attrs[SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ]).toBe(80);
+      expect(attrs[SemanticConventions.LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE]).toBe(20);
     });
   });
 });

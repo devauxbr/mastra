@@ -33,9 +33,14 @@ import {
 } from '@opentelemetry/semantic-conventions/incubating';
 
 // GenAI usage attribute keys (not all are in @opentelemetry/semantic-conventions yet)
+// @see https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/
 const GEN_AI_USAGE_REASONING_TOKENS = 'gen_ai.usage.reasoning_tokens';
-const GEN_AI_USAGE_CACHED_INPUT_TOKENS = 'gen_ai.usage.cached_input_tokens';
-const GEN_AI_USAGE_CACHE_WRITE_TOKENS = 'gen_ai.usage.cache_write_tokens';
+const GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS = 'gen_ai.usage.cache_read.input_tokens';
+const GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS = 'gen_ai.usage.cache_creation.input_tokens';
+// Legacy non-spec names emitted by older @mastra/otel-exporter versions; kept as
+// read-side fallbacks so cache metrics keep flowing during mixed-version rollouts.
+const GEN_AI_USAGE_CACHED_INPUT_TOKENS_LEGACY = 'gen_ai.usage.cached_input_tokens';
+const GEN_AI_USAGE_CACHE_WRITE_TOKENS_LEGACY = 'gen_ai.usage.cache_write_tokens';
 const GEN_AI_USAGE_AUDIO_INPUT_TOKENS = 'gen_ai.usage.audio_input_tokens';
 const GEN_AI_USAGE_AUDIO_OUTPUT_TOKENS = 'gen_ai.usage.audio_output_tokens';
 
@@ -89,15 +94,18 @@ function convertUsageMetricsToOpenInference(attributes: Record<string, any>): Re
     result[LLM_TOKEN_COUNT_TOTAL] = inputTokens + outputTokens;
   }
 
-  // Cache tokens (prompt details)
-  const cachedInputTokens = attributes[GEN_AI_USAGE_CACHED_INPUT_TOKENS];
-  if (cachedInputTokens !== undefined) {
-    result[LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ] = cachedInputTokens;
+  // Cache tokens (prompt details). Read the spec name first, fall back to the
+  // legacy name so spans emitted by older @mastra/otel-exporter still flow.
+  const cacheReadInputTokens =
+    attributes[GEN_AI_USAGE_CACHE_READ_INPUT_TOKENS] ?? attributes[GEN_AI_USAGE_CACHED_INPUT_TOKENS_LEGACY];
+  if (cacheReadInputTokens !== undefined) {
+    result[LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_READ] = cacheReadInputTokens;
   }
 
-  const cacheWriteTokens = attributes[GEN_AI_USAGE_CACHE_WRITE_TOKENS];
-  if (cacheWriteTokens !== undefined) {
-    result[LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE] = cacheWriteTokens;
+  const cacheCreationInputTokens =
+    attributes[GEN_AI_USAGE_CACHE_CREATION_INPUT_TOKENS] ?? attributes[GEN_AI_USAGE_CACHE_WRITE_TOKENS_LEGACY];
+  if (cacheCreationInputTokens !== undefined) {
+    result[LLM_TOKEN_COUNT_PROMPT_DETAILS_CACHE_WRITE] = cacheCreationInputTokens;
   }
 
   // Reasoning tokens (completion details)
